@@ -212,20 +212,32 @@ def parse_kanjidic(raw):
 
 
 def parse_jmdict(raw):
-    """-> {kanji form: (kana reading, [glosses], common)} keeping the first (most common) entry per form"""
-    out = {}
+    """-> ({kanji form: (kana reading, [glosses], common)}, {old kanji: {new kanji: count}})
+
+    The second part comes from entries that list a spelling marked "out-dated kanji" next to the current one
+    (出發 / 出発): where they differ in one character, that's an old -> new form pair (發 -> 発)."""
+    out, old_new = {}, {}
     for _, e in ET.iterparse(io.BytesIO(gzip.decompress(raw)), events=("end",)):
         if e.tag != "entry":
             continue
         rebs = [r.findtext("reb") for r in e.findall("r_ele")]
         glosses = [g.text for s in e.findall("sense") for g in s.findall("gloss") if g.get("{http://www.w3.org/XML/1998/namespace}lang") in (None, "eng")]
+        kebs = [(k.findtext("keb"), any(re.search(r"out-?dated kanji", i.text or "") for i in k.findall("ke_inf")))
+                 for k in e.findall("k_ele")]
+        for old, is_old in kebs:
+            for new, new_old in kebs:
+                if is_old and not new_old and old and new and len(old) == len(new):
+                    diff = [(a, b) for a, b in zip(old, new) if a != b]
+                    if len(diff) == 1:
+                        counts = old_new.setdefault(diff[0][0], {})
+                        counts[diff[0][1]] = counts.get(diff[0][1], 0) + 1
         for k in e.findall("k_ele"):
             keb = k.findtext("keb")
             common = k.find("ke_pri") is not None
             if keb and rebs and glosses and (keb not in out or (common and not out[keb][2])):
                 out[keb] = (rebs[0], glosses[:4], common)
         e.clear()
-    return out
+    return out, old_new
 
 
 def parse_rime(raw):
@@ -250,12 +262,18 @@ def main():
     cedict = parse_cedict(fetch("cedict"))
     uni, variants = parse_unihan(fetch("unihan"))
     kanjidic = parse_kanjidic(fetch("kanjidic"))
-    jmdict = parse_jmdict(fetch("jmdict"))
+    jmdict, old_new = parse_jmdict(fetch("jmdict"))
     rime_chars = parse_rime(fetch("rime_chars"))
     rime_words = parse_rime(fetch("rime_words"))
     for pr in PROBES:  # public dictionary entries only; helps check the sources from the log
         print(f"probe {pr}: unihan {dict((k, sorted(v)) for k, v in uni.get(pr, {}).items()) if len(pr) == 1 else '-'} · "
               f"rime {rime_chars.get(pr) if len(pr) == 1 else rime_words.get(pr)} · variants {sorted(variants.get(pr, []))}")
+    # old -> new kanji pairs seen in at least 2 Japanese words count as variants too (發 -> 発, 樂 -> 楽)
+    pairs = [(o, n) for o, ns in old_new.items() for n, cnt in ns.items() if cnt >= 2]
+    for o, n in pairs:
+        variants.setdefault(o, set()).add(n)
+        variants.setdefault(n, set()).add(o)
+    print(f"kanji old/new pairs from JMdict: {len(pairs)} · e.g. {[o + '>' + n for o, n in pairs if o in PROBES]}")
     print(f"parsed: cedict {len(cedict)} · unihan {len(uni)} · kanjidic {len(kanjidic)} · jmdict {len(jmdict)} · "
           f"rime chars {len(rime_chars)} · rime words {len(rime_words)}")
     empty = {"zh": set(), "yue": set(), "ja": set()}
@@ -272,13 +290,24 @@ def main():
                     zh[trad][py[0]] += [x for x in g if x not in zh[trad][py[0]]]
                     simp_of.setdefault(trad, simp)
 
-    # Cantonese per character: rime-cantonese readings that Unihan confirms
+    # Cantonese per character: rime-cantonese readings that Unihan confirms. Unihan lists only the main reading,
+    # so a second reading (行 hong4) counts when rime-cantonese uses it in at least 2 words that CC-CEDICT also has.
+    cedict_words = {t for t, *_ in cedict}
+    used = {}
+    for w, jys in rime_words.items():
+        if w in cedict_words:
+            for jy in jys:
+                syl = jy.split()
+                if len(syl) == len(w):
+                    for c, sy in zip(w, syl):
+                        used[(c, sy)] = used.get((c, sy), 0) + 1
     yue = {}
     for ch, readings in rime_chars.items():
         if len(ch) == 1:
-            ok = [r for r in readings if r in uni.get(ch, empty)["yue"]]
-            if ok:
-                yue[ch] = ok
+            main = [r for r in readings if r in uni.get(ch, empty)["yue"]]
+            more = [r for r in readings if r not in main and used.get((ch, r), 0) >= 2]
+            if main:
+                yue[ch] = main + more
 
     # Japanese per character: KANJIDIC readings that Unihan confirms
     ja = {}
@@ -321,7 +350,7 @@ def main():
 
     def yue_ok(trad, jy):
         syl = jy.split()
-        return len(trad) == len(syl) and all(s in uni.get(c, empty)["yue"] for c, s in zip(trad, syl))
+        return len(trad) == len(syl) and all(s in yue.get(c, ()) for c, s in zip(trad, syl))
 
     words, simp_words = {}, {}
     for trad, simp, py, gl in cedict:
