@@ -46,7 +46,9 @@ STOPWORDS = {"the", "and", "for", "with", "one", "sth", "sb", "someone", "someth
              "into", "that", "this", "its", "not", "are", "was", "who", "which", "make", "have", "get",
              "to", "of", "in", "on", "at", "by", "an", "or", "as", "is", "be", "it", "so", "no", "do"}
 SUFFIXES = ("ings", "ing", "ed", "es", "s", "ure", "ment", "ion")
-SKIP_GLOSS = re.compile(r"(?i)^(surname |variant of|old variant|archaic variant|japanese variant|used in |cl:|see |abbr\. for |\(old\))")
+SKIP_GLOSS = re.compile(r"(?i)^(surname |variant of|old variant|archaic variant|japanese variant|used in |cl:|see |abbr\. for |\(old\)|taiwan pr\.)")
+NOISE = re.compile(r"\((bound form|coll\.|colloquial)\)\s*")  # labels that only add length
+PROBES = ["行", "長", "大", "銀行", "發", "髮", "樂"]  # dictionary entries printed in the build log, to check the sources
 
 
 # ---------- Download ----------
@@ -141,7 +143,7 @@ def overlaps(a, b):
 
 def clean_glosses(gl, n=None):
     """Glosses without cross-references; n limits how many (for display), None keeps all (for meaning checks)."""
-    return [g for g in gl if g and not SKIP_GLOSS.match(g)][:n]
+    return [NOISE.sub("", g).strip() for g in gl if g and not SKIP_GLOSS.match(g)][:n]
 
 
 # ---------- Parse sources ----------
@@ -183,7 +185,9 @@ def parse_unihan(raw):
             elif field in ("kSimplifiedVariant", "kTraditionalVariant", "kSemanticVariant", "kZVariant",
                            "kSpecializedSemanticVariant"):
                 for v in re.findall(r"U\+([0-9A-F]+)", value):
-                    variants.setdefault(ch, set()).add(chr(int(v, 16)))
+                    other = chr(int(v, 16))
+                    variants.setdefault(ch, set()).add(other)  # links go both ways: 発 -> 發 also means 發 -> 発
+                    variants.setdefault(other, set()).add(ch)
     return readings, variants
 
 
@@ -249,6 +253,9 @@ def main():
     jmdict = parse_jmdict(fetch("jmdict"))
     rime_chars = parse_rime(fetch("rime_chars"))
     rime_words = parse_rime(fetch("rime_words"))
+    for pr in PROBES:  # public dictionary entries only; helps check the sources from the log
+        print(f"probe {pr}: unihan {dict((k, sorted(v)) for k, v in uni.get(pr, {}).items()) if len(pr) == 1 else '-'} · "
+              f"rime {rime_chars.get(pr) if len(pr) == 1 else rime_words.get(pr)} · variants {sorted(variants.get(pr, []))}")
     print(f"parsed: cedict {len(cedict)} · unihan {len(uni)} · kanjidic {len(kanjidic)} · jmdict {len(jmdict)} · "
           f"rime chars {len(rime_chars)} · rime words {len(rime_words)}")
     empty = {"zh": set(), "yue": set(), "ja": set()}
