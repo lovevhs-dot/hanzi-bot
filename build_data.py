@@ -234,6 +234,8 @@ def parse_jmdict(raw):
         for k in e.findall("k_ele"):
             keb = k.findtext("keb")
             common = k.find("ke_pri") is not None
+            if any(re.search(r"out-?dated kanji", i.text or "") for i in k.findall("ke_inf")):
+                continue  # never show an outdated spelling (音樂) as the Japanese word
             if keb and rebs and glosses and (keb not in out or (common and not out[keb][2])):
                 out[keb] = (rebs[0], glosses[:4], common)
         e.clear()
@@ -268,8 +270,10 @@ def main():
     for pr in PROBES:  # public dictionary entries only; helps check the sources from the log
         print(f"probe {pr}: unihan {dict((k, sorted(v)) for k, v in uni.get(pr, {}).items()) if len(pr) == 1 else '-'} · "
               f"rime {rime_chars.get(pr) if len(pr) == 1 else rime_words.get(pr)} · variants {sorted(variants.get(pr, []))}")
-    # old -> new kanji pairs seen in at least 2 Japanese words count as variants too (發 -> 発, 樂 -> 楽)
-    pairs = [(o, n) for o, ns in old_new.items() for n, cnt in ns.items() if cnt >= 2]
+    # old -> new kanji pairs count as variants too (發 -> 発, 樂 -> 楽) when the new one is a joyo kanji and the old
+    # one isn't (so a swapped-in different character doesn't count); the meaning check below still has to pass
+    is_joyo = lambda c: c in kanjidic and kanjidic[c]["joyo"]
+    pairs = [(o, n) for o, ns in old_new.items() for n in ns if is_joyo(n) and not is_joyo(o)]
     for o, n in pairs:
         variants.setdefault(o, set()).add(n)
         variants.setdefault(n, set()).add(o)
