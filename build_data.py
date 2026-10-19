@@ -47,7 +47,7 @@ STOPWORDS = {"the", "and", "for", "with", "one", "sth", "sb", "someone", "someth
              "to", "of", "in", "on", "at", "by", "an", "or", "as", "is", "be", "it", "so", "no", "do"}
 SUFFIXES = ("ings", "ing", "ed", "es", "s", "ure", "ment", "ion")
 SKIP_GLOSS = re.compile(r"(?i)^(surname |variant of|old variant|archaic variant|japanese variant|used in |cl:|see |abbr\. for |\(old\)|taiwan pr\.)")
-NOISE = re.compile(r"\((bound form|coll\.|colloquial)\)\s*")  # labels that only add length
+NOISE = re.compile(r"\((bound form|coll\.|colloquial)\)\s*|\[[^\]]*\]")  # labels and pinyin references like 大夫[dai4 fu5]
 PROBES = ["行", "長", "大", "銀行", "發", "髮", "樂"]  # dictionary entries printed in the build log, to check the sources
 
 
@@ -214,19 +214,19 @@ def parse_kanjidic(raw):
 def parse_jmdict(raw):
     """-> ({kanji form: (kana reading, [glosses], common)}, {old kanji: {new kanji: count}})
 
-    The second part comes from entries that list a spelling marked "out-dated kanji" next to the current one
-    (出發 / 出発): where they differ in one character, that's an old -> new form pair (發 -> 発)."""
+    The second part comes from entries that list another spelling next to the main one (出發 / 出発): where two
+    spellings differ in one character, that's a candidate old -> new form pair (發 -> 発). main() keeps only
+    pairs from a non-joyo to a joyo kanji, and the meaning check still has to pass."""
     out, old_new = {}, {}
     for _, e in ET.iterparse(io.BytesIO(gzip.decompress(raw)), events=("end",)):
         if e.tag != "entry":
             continue
         rebs = [r.findtext("reb") for r in e.findall("r_ele")]
         glosses = [g.text for s in e.findall("sense") for g in s.findall("gloss") if g.get("{http://www.w3.org/XML/1998/namespace}lang") in (None, "eng")]
-        kebs = [(k.findtext("keb"), any(re.search(r"out-?dated kanji", i.text or "") for i in k.findall("ke_inf")))
-                 for k in e.findall("k_ele")]
-        for old, is_old in kebs:
-            for new, new_old in kebs:
-                if is_old and not new_old and old and new and len(old) == len(new):
+        kebs = [(k.findtext("keb"), bool(k.findall("ke_inf"))) for k in e.findall("k_ele")]
+        for old, _ in kebs:
+            for new, flagged in kebs:
+                if not flagged and old and new and old != new and len(old) == len(new):
                     diff = [(a, b) for a, b in zip(old, new) if a != b]
                     if len(diff) == 1:
                         counts = old_new.setdefault(diff[0][0], {})
@@ -234,8 +234,8 @@ def parse_jmdict(raw):
         for k in e.findall("k_ele"):
             keb = k.findtext("keb")
             common = k.find("ke_pri") is not None
-            if any(re.search(r"out-?dated kanji", i.text or "") for i in k.findall("ke_inf")):
-                continue  # never show an outdated spelling (音樂) as the Japanese word
+            if k.findall("ke_inf"):
+                continue  # only the normal spelling is shown (not outdated / rare / irregular ones like 音樂)
             if keb and rebs and glosses and (keb not in out or (common and not out[keb][2])):
                 out[keb] = (rebs[0], glosses[:4], common)
         e.clear()

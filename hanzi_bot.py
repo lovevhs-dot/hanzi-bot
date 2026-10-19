@@ -40,6 +40,7 @@ SECRET_STATE = Path("state.enc")
 DATA = Path("data/hanzi.json.gz")
 MENU_VERSION = 1  # bump when COMMANDS change so Telegram's menu gets refreshed
 MAX_CARDS = 3  # /look with several matches (e.g. 发 -> 發, 髮) shows at most this many
+GLOSS_LEN = 60  # long dictionary glosses are cut to this many characters
 
 HELP = (
     "Commands:\n"
@@ -116,6 +117,10 @@ def pinyin(syllable, style):
     return unicodedata.normalize("NFC", base[: i + 1] + VOWEL_MARKS[tone] + base[i + 1:])
 
 
+def short(glosses, n=3):
+    return "; ".join(g if len(g) <= GLOSS_LEN else g[: GLOSS_LEN - 1].rstrip() + "…" for g in glosses[:n])
+
+
 def pinyin_text(keys, style):
     """A word's syllables: 'yin2 hang2' -> 'yínháng' (one word, apostrophe before a/o/e: 'xī'ān'); numbers keep spaces."""
     if not keys:
@@ -145,7 +150,7 @@ def ja_line(form):
 
 def example_line(trad, style):
     w = data()["words"][trad]
-    return f"{w[W_SIMP]} {pinyin_text(w[W_PINYIN], style)} / {trad} {w[W_JYUT]} / {w[W_JA]} {w[W_JA_READ]} — {w[W_GLOSS][0]}"
+    return f"{w[W_SIMP]} {pinyin_text(w[W_PINYIN], style)} / {trad} {w[W_JYUT]} / {w[W_JA]} {w[W_JA_READ]} — {short(w[W_GLOSS], 1)}"
 
 
 def char_card(trad, style):
@@ -153,7 +158,7 @@ def char_card(trad, style):
     simp, ja = c["s"], c["ja"]
     lines = [f"{simp} / {trad} / {ja or '—'}"]
     if c["zh"]:
-        lines.append(f"🇨🇳 {simp} " + " · ".join(f"{pinyin(p, style)} — {'; '.join(g)}" for p, g in c["zh"]))
+        lines.append(f"🇨🇳 {simp} " + " · ".join(f"{pinyin(p, style)} — {short(g)}" for p, g in c["zh"]))
     else:
         lines.append("🇨🇳 — not used in Mandarin")
     lines.append(f"🇭🇰 {trad} {' · '.join(c['yue'])}" if c["yue"] else "🇭🇰 — not in the Cantonese dictionary")
@@ -175,10 +180,10 @@ def word_card(trad, style):
     w = data()["words"][trad]
     lines = [f"{w[W_SIMP]} / {trad} / {w[W_JA] or '—'}"]
     py = pinyin_text(w[W_PINYIN], style)
-    lines.append(f"🇨🇳 {w[W_SIMP]} {py + ' ' if py else ''}— {'; '.join(w[W_GLOSS])}")
+    lines.append(f"🇨🇳 {w[W_SIMP]} {py + ' ' if py else ''}— {short(w[W_GLOSS])}")
     lines.append(f"🇭🇰 {trad} {w[W_JYUT]}" if w[W_JYUT] else "🇭🇰 — not in the Cantonese dictionary")
     if w[W_JA]:
-        lines.append(f"🇯🇵 {w[W_JA]} {w[W_JA_READ]} — {'; '.join(w[W_JA_GLOSS][:3])}")
+        lines.append(f"🇯🇵 {w[W_JA]} {w[W_JA_READ]} — {short(w[W_JA_GLOSS])}")
     else:
         lines.append("🇯🇵 — no matching Japanese word")
     return "\n".join(lines)
@@ -189,9 +194,14 @@ def find(text):
     d = data()
     hits = []
     if len(text) == 1:
-        for t in [text] + d["simp"].get(text, []) + ([d["ja_to_trad"][text]] if text in d["ja_to_trad"] else []):
+        trads = d["simp"].get(text, [])
+        # a simplified character can also exist on its own without Mandarin data (气 next to 氣): skip that one
+        own = [text] if text in d["chars"] and (d["chars"][text]["zh"] or not trads) else []
+        for t in own + trads + ([d["ja_to_trad"][text]] if text in d["ja_to_trad"] else []):
             if t in d["chars"] and ("char", t) not in hits:
                 hits.append(("char", t))
+        pool = set(d["pool"])
+        hits.sort(key=lambda h: (h[1] not in pool, not d["chars"][h[1]]["zh"]))  # everyday meaning first
         if not hits and text in d["ja"]:
             hits.append(("ja", text))
     else:
