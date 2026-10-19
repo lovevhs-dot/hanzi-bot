@@ -117,6 +117,11 @@ def pinyin(syllable, style):
     return unicodedata.normalize("NFC", base[: i + 1] + VOWEL_MARKS[tone] + base[i + 1:])
 
 
+def forms(simp, trad):
+    """'银 / 銀', or just '游' when both forms are the same."""
+    return simp if simp == trad else f"{simp} / {trad}"
+
+
 def short(glosses, n=3):
     return "; ".join(g if len(g) <= GLOSS_LEN else g[: GLOSS_LEN - 1].rstrip() + "…" for g in glosses[:n])
 
@@ -267,8 +272,8 @@ def quiz_question(item, style):
             asks.append(("ja", f"{c['ja']} — Japanese on'yomi?", d["ja"][c["ja"]]["on"][0], set(d["ja"][c["ja"]]["on"]),
                          lambda t: next(iter((d["ja"].get(d["chars"][t]["ja"]) or {}).get("on", [])), None)))
         if c["zh"]:
-            asks.append(("meaning", f"Which one means “{c['zh'][0][1][0]}”?", f"{c['s']} / {key}", set(),
-                         lambda t: f"{d['chars'][t]['s']} / {t}"))
+            asks.append(("meaning", f"Which one means “{c['zh'][0][1][0]}”?", forms(c["s"], key), set(),
+                         lambda t: forms(d["chars"][t]["s"], t)))
     elif kind == "word":
         w = d["words"][key]
         words = [t for t in d["words"] if len(t) == len(key) and d["words"][t][W_COMMON]] or list(d["words"])
@@ -278,8 +283,8 @@ def quiz_question(item, style):
                          lambda t: pinyin_text(d["words"][t][W_PINYIN], style) or None))
         if w[W_JYUT]:
             asks.append(("yue", f"{key} — Cantonese reading?", w[W_JYUT], set(), lambda t: d["words"][t][W_JYUT] or None))
-        asks.append(("meaning", f"Which one means “{w[W_GLOSS][0]}”?", f"{w[W_SIMP]} / {key}", set(),
-                     lambda t: f"{d['words'][t][W_SIMP]} / {t}"))
+        asks.append(("meaning", f"Which one means “{w[W_GLOSS][0]}”?", forms(w[W_SIMP], key), set(),
+                     lambda t: forms(d["words"][t][W_SIMP], t)))
         pool = words
     else:
         return None
