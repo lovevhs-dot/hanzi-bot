@@ -171,6 +171,8 @@ def parse_unihan(raw):
             cp, field, value = line.split("\t", 2)
             ch = chr(int(cp[2:], 16))
             r = readings.setdefault(ch, {"zh": set(), "yue": set(), "ja": set()})
+            if field == "kHanyuPinlu":  # 'xíng(1234) háng(56)': counts from a modern Mandarin frequency dictionary
+                r["cn_freq"] = sum(int(n) for n in re.findall(r"\((\d+)\)", value))
             if field in ("kMandarin", "kHanyuPinyin", "kXHC1983", "kTGHZ2013", "kHanyuPinlu"):
                 for p in re.split(r"[\s,]+", re.sub(r"[\d.]+:", " ", re.sub(r"\(\d+\)", "", value))):
                     k = pinyin_key(p)
@@ -378,16 +380,22 @@ def main():
     # Random pool: characters with all three languages checked and a meaning-verified Japanese joyo form
     pool = sorted(t for t, c in chars.items()
                   if c["zh"] and c["yue"] and c["ja"] and not c["jdiff"] and ja[c["ja"]]["joyo"])
-    # Level 1-5 from when schools teach the character, in Japan (KANJIDIC grade) and Hong Kong (Unihan kGradeLevel);
-    # the later of the two counts, so level 1 is early-taught in both. Japanese secondary-school kanji: level 4 if
-    # common in newspapers (KANJIDIC frequency rank), else 5. Not taught in Hong Kong primary school: at least 4.
+    # Level 1-5, the hardest of three views, so level 1 is easy everywhere:
+    #   Japan: school grade it's taught in (KANJIDIC); secondary-school kanji 4 if common in newspapers, else 5
+    #   Hong Kong: primary school grade (Unihan kGradeLevel); not taught there -> at least 4
+    #   Mainland China: rank in a modern Mandarin frequency dictionary (Unihan kHanyuPinlu, simplified form)
     school = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3}
+    cn_rank = {c: i + 1 for i, c in enumerate(sorted((c for c in uni if uni[c].get("cn_freq")),
+                                                     key=lambda c: -uni[c]["cn_freq"]))}
+    cn_bands = [(500, 1), (1000, 2), (1500, 3), (2500, 4)]
     level = {}
     for t in pool:
         k = kanjidic[chars[t]["ja"]]
         jp = school.get(k["grade"]) or (4 if k["freq"] and k["freq"] <= 1500 else 5)
         hk = school.get(uni.get(t, empty).get("hk"), 4)
-        level[t] = max(jp, hk)
+        rank = min(cn_rank.get(chars[t]["s"], 10 ** 6), cn_rank.get(t, 10 ** 6))
+        cn = next((lv for top, lv in cn_bands if rank <= top), 5)
+        level[t] = max(jp, hk, cn)
     # Examples: common two-character words where all three languages passed every check, easiest words first
     candidates = {}
     for trad, w in words.items():
