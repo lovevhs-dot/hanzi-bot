@@ -1,15 +1,14 @@
 """Hanzi in three languages -> Telegram: Mandarin, Cantonese and Japanese side by side.
 
-Telegram commands:
+Telegram commands (the menu shows /random /look /quiz /save /review /about; /level /remove /tones work too):
   /random          a random character used in all three languages, at your level (/random 3: a level just this once)
   /level 2         set your level, 1 (easiest) to 5, or "all"
   /about           what's inside: how many characters and words, what each level means, data sources
   /look 行         look up a character or word (simplified, traditional or Japanese form)
-  /quiz            4-choice question from your saved list (/quiz random: from any character)
+  /quiz            4-choice question from your saved list
   /save            save the last character or word you saw
   /review          your saved list, numbered
   /remove 2        remove by number or by character (/remove all asks to confirm)
-  /stats           how many you've saved
   /tones marks     Mandarin tones as marks (xíng) or numbers (xing2)
 
 The bot only answers; it never messages first.
@@ -40,7 +39,7 @@ STATE_KEY = (os.environ.get("STATE_KEY") or "").strip()
 PLAIN_STATE = Path("state.json")
 SECRET_STATE = Path("state.enc")
 DATA = Path("data/hanzi.json.gz")
-MENU_VERSION = 3  # bump when COMMANDS change so Telegram's menu gets refreshed
+MENU_VERSION = 4  # bump when COMMANDS change so Telegram's menu gets refreshed
 DEFAULT_LEVEL = "1"
 LEVELS = ("1", "2", "3", "4", "5")
 LEVEL_INFO = {  # what each level means (matches build_data.py; the hardest of the three views counts)
@@ -56,28 +55,20 @@ GLOSS_LEN = 60  # long dictionary glosses are cut to this many characters
 HELP = (
     "Commands:\n"
     "/random — a random character at your level (Mandarin · Cantonese · Japanese)\n"
-    "/level 1–5 — easiest 1 to hardest 5, or /level all\n"
-    "/about — how many characters, what each level means\n"
     "/look 行 — look up a character or word (any form: 银 / 銀)\n"
-    "/quiz — a question from your saved list · /quiz random — from any character\n"
-    "   Answer with 1, 2, 3 or 4\n"
     "/save — save what you just saw\n"
-    "/review — your saved list · /remove 2 — remove by number\n"
-    "/stats — how many you've saved\n"
-    "/tones marks · /tones numbers — how Mandarin tones are shown\n\n"
+    "/quiz — a question from your saved list, answer with 1–4\n"
+    "/review — your saved list (remove one: /remove 2)\n"
+    "/about — what's inside, levels (change: /level 2), tone style\n\n"
     "Only dictionary data that passed cross-checks is shown."
 )
-COMMANDS = [
-    {"command": "random", "description": "A random character"},
-    {"command": "level", "description": "Set level: /level 1 (easy) to 5"},
-    {"command": "about", "description": "What's inside: counts, levels, sources"},
+COMMANDS = [  # the menu; /level, /remove and /tones still work, they're explained in /about and /review
+    {"command": "random", "description": "A random character at your level"},
     {"command": "look", "description": "Look up: /look 行"},
     {"command": "quiz", "description": "Quiz from your saved list"},
     {"command": "save", "description": "Save what you just saw"},
     {"command": "review", "description": "Your saved list"},
-    {"command": "remove", "description": "Remove: /remove 2"},
-    {"command": "stats", "description": "How many you've saved"},
-    {"command": "tones", "description": "/tones marks or /tones numbers"},
+    {"command": "about", "description": "What's inside, levels, settings"},
 ]
 # word fields in data["words"][trad]
 W_SIMP, W_PINYIN, W_GLOSS, W_JYUT, W_JA, W_JA_READ, W_JA_GLOSS, W_COMMON = range(8)
@@ -334,11 +325,10 @@ def level_pool(level):
     return d["pool"] if level == "all" else [t for t in d["pool"] if str(d["level"].get(t)) == level]
 
 
-def start_quiz(state, from_saved):
-    saved = [tuple(x) for x in state.get("saved", [])]
-    choices = saved if from_saved and saved else [("char", t) for t in level_pool(state.get("level", DEFAULT_LEVEL))]
+def start_quiz(state):
+    choices = [tuple(x) for x in state.get("saved", [])]
     if not choices:
-        send("No characters at your level. Try /level all")
+        send("📚 Your saved list is empty. See characters with /random or /look, keep them with /save, then /quiz.")
         return
     style = state.get("tones", "marks")
     for _ in range(10):
@@ -347,11 +337,10 @@ def start_quiz(state, from_saved):
         if q:
             question, options, answer = q
             state["quiz"] = {"item": list(item), "options": options, "answer": answer}
-            where = "your saved list" if from_saved and saved else "random"
-            send(f"❓ {question}  ({where})\n\n" + "\n".join(f"{i + 1}) {o}" for i, o in enumerate(options))
+            send(f"❓ {question}\n\n" + "\n".join(f"{i + 1}) {o}" for i, o in enumerate(options))
                  + "\n\nAnswer with 1, 2, 3 or 4")
             return
-    send("❔ Couldn't make a question right now. Try /quiz random")
+    send("❔ Couldn't make a question from your saved list right now. Save a few more with /save.")
 
 
 def answer_quiz(state, n):
@@ -454,13 +443,13 @@ def run_command(state, cmd, arg):
                 saved[:] = keep
 
     elif cmd == "/quiz":
-        start_quiz(state, from_saved=arg.lower() != "random")
+        start_quiz(state)
 
     elif cmd == "/level":
         counts = " · ".join(f"{n}: {len(level_pool(n))}" for n in LEVELS)
         if arg.lower() in LEVELS + ("all",):
             state["level"] = arg.lower()
-            send(f"📶 Level set to {arg.lower()} for /random and /quiz random\n\nCharacters per level — {counts}")
+            send(f"📶 Level set to {arg.lower()} for /random\n\nCharacters per level — {counts}")
         else:
             send(f"📶 Your level: {state.get('level', DEFAULT_LEVEL)}\n"
                  "1 = taught early in both Japan and Hong Kong primary school … 5 = rarer secondary-school kanji\n\n"
@@ -478,12 +467,10 @@ def run_command(state, cmd, arg):
              f"🔎 /look covers {len(d['chars']):,} characters and {len(d['words']):,} words\n\n"
              f"📶 Levels (yours: {state.get('level', DEFAULT_LEVEL)}) — the hardest of Japan · Hong Kong · mainland China counts\n"
              + "\n".join(rows) + "\n\n"
+             f"Change level: /level 2 (or /level all)\n"
+             f"Tones: /tones marks (xíng) or /tones numbers (xing2) — now {state.get('tones', 'marks')}\n\n"
              "📚 Data: CC-CEDICT · rime-cantonese · KANJIDIC2 · JMdict · Unicode Unihan\n"
              f"Only readings two sources agree on are shown. Updated monthly (last: {d['meta']['built']}).")
-
-    elif cmd == "/stats":
-        chars = sum(1 for k, _ in saved if k == "char")
-        send(f"📚 Saved: {len(saved)} (characters {chars} · words {len(saved) - chars})")
 
     elif cmd == "/tones" and arg.lower() in ("marks", "numbers"):
         state["tones"] = arg.lower()
