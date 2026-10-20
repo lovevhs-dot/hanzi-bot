@@ -7,7 +7,7 @@ Telegram commands (the menu shows /random /look /quiz /save /review /about; /lev
   /look 行         look up a character or word (simplified, traditional or Japanese form)
   /quiz            4-choice question from your saved list
   /save            save the last character or word you saw
-  /review          your saved list, numbered
+  /review          your saved list, numbered, 30 per page (/review 2: page 2)
   /remove 2        remove by number or by character (/remove all asks to confirm)
   /tones marks     Mandarin tones as marks (xíng) or numbers (xing2)
 
@@ -49,6 +49,7 @@ LEVEL_INFO = {  # what each level means (matches build_data.py; the hardest of t
     "4": "Japanese secondary school or not in Hong Kong primary, top 2,500 in Mandarin",
     "5": "everything rarer",
 }
+REVIEW_PAGE = 30  # saved items per /review page (a Telegram message holds about 4,000 characters)
 MAX_CARDS = 3  # /look with several matches (e.g. 发 -> 發, 髮) shows at most this many
 GLOSS_LEN = 60  # long dictionary glosses are cut to this many characters
 
@@ -420,8 +421,18 @@ def run_command(state, cmd, arg):
         if not saved:
             send("📚 Your saved list is empty. /random or /look, then /save.")
         else:
-            rows = [f"{i + 1}. {label(tuple(x), style)}" for i, x in enumerate(saved)]
-            send(f"📚 Saved — {len(saved)}\n\n" + "\n".join(rows) + "\n\n/remove 2 to remove · /quiz to practice")
+            pages = (len(saved) + REVIEW_PAGE - 1) // REVIEW_PAGE
+            page = min(max(int(arg), 1), pages) if arg.isdigit() else 1
+            first = (page - 1) * REVIEW_PAGE
+            rows = [f"{i + 1}. {label(tuple(x), style)}" for i, x in enumerate(saved[first:first + REVIEW_PAGE], first)]
+            nav = []
+            if page > 1:
+                nav.append(f"◀ /review {page - 1}")
+            if page < pages:
+                nav.append(f"/review {page + 1} ▶")
+            head = f"📚 Saved — {len(saved)}" + (f" · page {page}/{pages}" if pages > 1 else "")
+            send(f"{head}\n\n" + "\n".join(rows) + "\n\n" + (" · ".join(nav) + "\n" if nav else "")
+                 + "/remove 2 to remove · /quiz to practice")
 
     elif cmd == "/remove" and arg:
         if arg.lower() == "all":
