@@ -3,6 +3,7 @@
 Telegram commands:
   /random          a random character used in all three languages, at your level (/random 3: a level just this once)
   /level 2         set your level, 1 (easiest) to 5, or "all"
+  /about           what's inside: how many characters and words, what each level means, data sources
   /look 行         look up a character or word (simplified, traditional or Japanese form)
   /quiz            4-choice question from your saved list (/quiz random: from any character)
   /save            save the last character or word you saw
@@ -39,9 +40,16 @@ STATE_KEY = (os.environ.get("STATE_KEY") or "").strip()
 PLAIN_STATE = Path("state.json")
 SECRET_STATE = Path("state.enc")
 DATA = Path("data/hanzi.json.gz")
-MENU_VERSION = 2  # bump when COMMANDS change so Telegram's menu gets refreshed
+MENU_VERSION = 3  # bump when COMMANDS change so Telegram's menu gets refreshed
 DEFAULT_LEVEL = "1"
 LEVELS = ("1", "2", "3", "4", "5")
+LEVEL_INFO = {  # what each level means (matches build_data.py; the hardest of the three views counts)
+    "1": "taught in grades 1–2 in Japan and Hong Kong, top 500 in Mandarin",
+    "2": "grades 3–4, top 1,000 in Mandarin",
+    "3": "grades 5–6, top 1,500 in Mandarin",
+    "4": "Japanese secondary school or not in Hong Kong primary, top 2,500 in Mandarin",
+    "5": "everything rarer",
+}
 MAX_CARDS = 3  # /look with several matches (e.g. 发 -> 發, 髮) shows at most this many
 GLOSS_LEN = 60  # long dictionary glosses are cut to this many characters
 
@@ -49,6 +57,7 @@ HELP = (
     "Commands:\n"
     "/random — a random character at your level (Mandarin · Cantonese · Japanese)\n"
     "/level 1–5 — easiest 1 to hardest 5, or /level all\n"
+    "/about — how many characters, what each level means\n"
     "/look 行 — look up a character or word (any form: 银 / 銀)\n"
     "/quiz — a question from your saved list · /quiz random — from any character\n"
     "   Answer with 1, 2, 3 or 4\n"
@@ -61,6 +70,7 @@ HELP = (
 COMMANDS = [
     {"command": "random", "description": "A random character"},
     {"command": "level", "description": "Set level: /level 1 (easy) to 5"},
+    {"command": "about", "description": "What's inside: counts, levels, sources"},
     {"command": "look", "description": "Look up: /look 行"},
     {"command": "quiz", "description": "Quiz from your saved list"},
     {"command": "save", "description": "Save what you just saw"},
@@ -455,6 +465,21 @@ def run_command(state, cmd, arg):
             send(f"📶 Your level: {state.get('level', DEFAULT_LEVEL)}\n"
                  "1 = taught early in both Japan and Hong Kong primary school … 5 = rarer secondary-school kanji\n\n"
                  f"Characters per level — {counts}\n\nChange it: /level 2 (or /level all)")
+
+    elif cmd in ("/about", "/info"):
+        d = data()
+        rows = []
+        for n in LEVELS:
+            chars = level_pool(n)
+            sample = random.Random(int(n)).sample(chars, min(6, len(chars)))  # same examples every time
+            rows.append(f"{n} · {len(chars):,} — {LEVEL_INFO[n]}\n    e.g. {' '.join(x if d['chars'][x]['s'] == x else f"{d['chars'][x]['s']}({x})" for x in sample)}")
+        send("ℹ️ What's inside\n\n"
+             f"🎲 /random picks from {len(d['pool']):,} characters used in all three languages\n"
+             f"🔎 /look covers {len(d['chars']):,} characters and {len(d['words']):,} words\n\n"
+             f"📶 Levels (yours: {state.get('level', DEFAULT_LEVEL)}) — the hardest of Japan · Hong Kong · mainland China counts\n"
+             + "\n".join(rows) + "\n\n"
+             "📚 Data: CC-CEDICT · rime-cantonese · KANJIDIC2 · JMdict · Unicode Unihan\n"
+             f"Only readings two sources agree on are shown. Updated monthly (last: {d['meta']['built']}).")
 
     elif cmd == "/stats":
         chars = sum(1 for k, _ in saved if k == "char")
