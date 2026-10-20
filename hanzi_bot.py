@@ -244,17 +244,20 @@ def card(item, style):
 
 
 def label(item, style):
-    """One line for the saved list."""
+    """One line for the saved list: forms, Mandarin · Cantonese · Japanese reading, meaning."""
     kind, key = item
     d = data()
     if kind == "char":
         c = d["chars"][key]
         zh = pinyin(c["zh"][0][0], style) if c["zh"] else "—"
-        meaning = c["zh"][0][1][0] if c["zh"] else (d["ja"][c["ja"]]["m"][0] if c["ja"] in d["ja"] else "")
-        return f"{c['s']}/{key}/{c['ja'] or '—'}  {zh} · {c['yue'][0] if c['yue'] else '—'} — {meaning}"
+        j = d["ja"].get(c["ja"]) or {}
+        ja = (j.get("on") or [kun_text(k) for k in j.get("kun", [])] or ["—"])[0]  # first on'yomi, else first kun'yomi
+        meaning = c["zh"][0][1][0] if c["zh"] else (j["m"][0] if j.get("m") else "")
+        return f"{c['s']}/{key}/{c['ja'] or '—'}  {zh} · {c['yue'][0] if c['yue'] else '—'} · {ja} — {meaning}"
     if kind == "word":
         w = d["words"][key]
-        return f"{w[W_SIMP]}/{key}  {pinyin_text(w[W_PINYIN], style) or '—'} · {w[W_JYUT] or '—'} — {w[W_GLOSS][0]}"
+        return (f"{w[W_SIMP]}/{key}/{w[W_JA] or '—'}  {pinyin_text(w[W_PINYIN], style) or '—'} · {w[W_JYUT] or '—'} · "
+                f"{w[W_JA_READ] or '—'} — {w[W_GLOSS][0]}")
     return f"{key}  {ja_line(key)}"
 
 
