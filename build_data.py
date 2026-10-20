@@ -178,6 +178,8 @@ def parse_unihan(raw):
                         r["zh"].add(k)
             elif field == "kCantonese":
                 r["yue"].update(value.split())
+            elif field == "kGradeLevel":  # Hong Kong primary school grade (1-6) in which the character is taught
+                r["hk"] = int(value.split()[0])
             elif field in ("kJapaneseOn", "kJapaneseKun"):
                 r["ja"].update(value.upper().split())
             elif field == "kJapanese":  # newer Unihan: readings in kana
@@ -192,7 +194,7 @@ def parse_unihan(raw):
 
 
 def parse_kanjidic(raw):
-    """-> {char: {"on": [...], "kun": [...], "m": [...], "joyo": bool}}"""
+    """-> {char: {"on": [...], "kun": [...], "m": [...], "joyo": bool, "grade": int or None, "freq": int or None}}"""
     out = {}
     root = ET.fromstring(gzip.decompress(raw))
     for c in root.iter("character"):
@@ -207,7 +209,9 @@ def parse_kanjidic(raw):
         for m in c.iter("meaning"):
             if m.get("m_lang") in (None, "en"):
                 mean.append(m.text)
-        out[lit] = {"on": on, "kun": kun, "m": mean, "joyo": grade is not None and int(grade) <= 8}
+        freq = c.findtext("misc/freq")
+        out[lit] = {"on": on, "kun": kun, "m": mean, "joyo": grade is not None and int(grade) <= 8,
+                    "grade": int(grade) if grade else None, "freq": int(freq) if freq else None}
     return out
 
 
@@ -268,7 +272,7 @@ def main():
     rime_chars = parse_rime(fetch("rime_chars"))
     rime_words = parse_rime(fetch("rime_words"))
     for pr in PROBES:  # public dictionary entries only; helps check the sources from the log
-        print(f"probe {pr}: unihan {dict((k, sorted(v)) for k, v in uni.get(pr, {}).items()) if len(pr) == 1 else '-'} · "
+        print(f"probe {pr}: unihan {dict((k, sorted(v) if isinstance(v, set) else v) for k, v in uni.get(pr, {}).items()) if len(pr) == 1 else '-'} · "
               f"rime {rime_chars.get(pr) if len(pr) == 1 else rime_words.get(pr)} · variants {sorted(variants.get(pr, []))}")
     # old -> new kanji pairs count as variants too (發 -> 発, 樂 -> 楽) when the new one is a joyo kanji and the old
     # one isn't (so a swapped-in different character doesn't count); the meaning check below still has to pass
@@ -374,18 +378,31 @@ def main():
     # Random pool: characters with all three languages checked and a meaning-verified Japanese joyo form
     pool = sorted(t for t, c in chars.items()
                   if c["zh"] and c["yue"] and c["ja"] and not c["jdiff"] and ja[c["ja"]]["joyo"])
-    # Examples: common two-character words where all three languages passed every check
-    ex = {}
+    # Level 1-5 from when schools teach the character, in Japan (KANJIDIC grade) and Hong Kong (Unihan kGradeLevel);
+    # the later of the two counts, so level 1 is early-taught in both. Japanese secondary-school kanji: level 4 if
+    # common in newspapers (KANJIDIC frequency rank), else 5. Not taught in Hong Kong primary school: at least 4.
+    school = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3}
+    level = {}
+    for t in pool:
+        k = kanjidic[chars[t]["ja"]]
+        jp = school.get(k["grade"]) or (4 if k["freq"] and k["freq"] <= 1500 else 5)
+        hk = school.get(uni.get(t, empty).get("hk"), 4)
+        level[t] = max(jp, hk)
+    # Examples: common two-character words where all three languages passed every check, easiest words first
+    candidates = {}
     for trad, w in words.items():
         if len(trad) == 2 and w[1] and w[3] and w[4] and w[7]:
             for c in set(trad):
-                if c in chars and len(ex.setdefault(c, [])) < EXAMPLES_PER_CHAR:
-                    ex[c].append(trad)
+                if c in chars:
+                    candidates.setdefault(c, []).append(trad)
+    ex = {c: sorted(ws, key=lambda w: (max(level.get(x, 6) for x in w), w))[:EXAMPLES_PER_CHAR]
+          for c, ws in candidates.items()}
 
     data = {"chars": chars, "simp": simp_index, "ja": ja, "ja_to_trad": ja_to_trad, "words": words,
-            "simp_words": simp_words, "pool": pool, "ex": ex,
+            "simp_words": simp_words, "pool": pool, "ex": ex, "level": level,
             "meta": {"built": date.today().isoformat()}}
     counts = {"chars": len(chars), "words": len(words), "ja": len(ja), "pool": len(pool)}
+    print("pool by level:", {n: sum(1 for v in level.values() if v == n) for n in range(1, 6)})
     print(f"result: {counts} · pool with examples {sum(1 for t in pool if ex.get(t))} · "
           f"words with pinyin {sum(1 for w in words.values() if w[1])} · with jyutping {sum(1 for w in words.values() if w[3])} · "
           f"with japanese {sum(1 for w in words.values() if w[4])}")

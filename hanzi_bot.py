@@ -1,7 +1,8 @@
 """Hanzi in three languages -> Telegram: Mandarin, Cantonese and Japanese side by side.
 
 Telegram commands:
-  /random          a random character used in all three languages
+  /random          a random character used in all three languages, at your level (/random 3: a level just this once)
+  /level 2         set your level, 1 (easiest) to 5, or "all"
   /look 行         look up a character or word (simplified, traditional or Japanese form)
   /quiz            4-choice question from your saved list (/quiz random: from any character)
   /save            save the last character or word you saw
@@ -38,13 +39,16 @@ STATE_KEY = (os.environ.get("STATE_KEY") or "").strip()
 PLAIN_STATE = Path("state.json")
 SECRET_STATE = Path("state.enc")
 DATA = Path("data/hanzi.json.gz")
-MENU_VERSION = 1  # bump when COMMANDS change so Telegram's menu gets refreshed
+MENU_VERSION = 2  # bump when COMMANDS change so Telegram's menu gets refreshed
+DEFAULT_LEVEL = "1"
+LEVELS = ("1", "2", "3", "4", "5")
 MAX_CARDS = 3  # /look with several matches (e.g. 发 -> 發, 髮) shows at most this many
 GLOSS_LEN = 60  # long dictionary glosses are cut to this many characters
 
 HELP = (
     "Commands:\n"
-    "/random — a random character (Mandarin · Cantonese · Japanese)\n"
+    "/random — a random character at your level (Mandarin · Cantonese · Japanese)\n"
+    "/level 1–5 — easiest 1 to hardest 5, or /level all\n"
     "/look 行 — look up a character or word (any form: 银 / 銀)\n"
     "/quiz — a question from your saved list · /quiz random — from any character\n"
     "   Answer with 1, 2, 3 or 4\n"
@@ -56,6 +60,7 @@ HELP = (
 )
 COMMANDS = [
     {"command": "random", "description": "A random character"},
+    {"command": "level", "description": "Set level: /level 1 (easy) to 5"},
     {"command": "look", "description": "Look up: /look 行"},
     {"command": "quiz", "description": "Quiz from your saved list"},
     {"command": "save", "description": "Save what you just saw"},
@@ -161,7 +166,8 @@ def example_line(trad, style):
 def char_card(trad, style):
     c = data()["chars"][trad]
     simp, ja = c["s"], c["ja"]
-    lines = [f"{simp} / {trad} / {ja or '—'}"]
+    lv = data()["level"].get(trad)
+    lines = [f"{simp} / {trad} / {ja or '—'}" + (f"   · level {lv}" if lv else "")]
     if c["zh"]:
         lines.append(f"🇨🇳 {simp} " + " · ".join(f"{pinyin(p, style)} — {short(g)}" for p, g in c["zh"]))
     else:
@@ -312,10 +318,18 @@ def quiz_question(item, style):
     return None
 
 
-def start_quiz(state, from_saved):
+def level_pool(level):
+    """Pool characters at this level ("all" -> every level)."""
     d = data()
+    return d["pool"] if level == "all" else [t for t in d["pool"] if str(d["level"].get(t)) == level]
+
+
+def start_quiz(state, from_saved):
     saved = [tuple(x) for x in state.get("saved", [])]
-    choices = saved if from_saved and saved else [("char", t) for t in d["pool"]]
+    choices = saved if from_saved and saved else [("char", t) for t in level_pool(state.get("level", DEFAULT_LEVEL))]
+    if not choices:
+        send("No characters at your level. Try /level all")
+        return
     style = state.get("tones", "marks")
     for _ in range(10):
         item = random.choice(choices)
@@ -376,7 +390,11 @@ def run_command(state, cmd, arg):
     saved = state.setdefault("saved", [])
 
     if cmd == "/random":
-        item = ("char", random.choice(data()["pool"]))
+        level = arg if arg in LEVELS else state.get("level", DEFAULT_LEVEL)
+        if not level_pool(level):
+            send(f"No characters at level {level}. Try /level all")
+            return
+        item = ("char", random.choice(level_pool(level)))
         state["last"] = list(item)
         send(card(item, style) + "\n\n/save · /random for another")
 
@@ -427,6 +445,16 @@ def run_command(state, cmd, arg):
 
     elif cmd == "/quiz":
         start_quiz(state, from_saved=arg.lower() != "random")
+
+    elif cmd == "/level":
+        counts = " · ".join(f"{n}: {len(level_pool(n))}" for n in LEVELS)
+        if arg.lower() in LEVELS + ("all",):
+            state["level"] = arg.lower()
+            send(f"📶 Level set to {arg.lower()} for /random and /quiz random\n\nCharacters per level — {counts}")
+        else:
+            send(f"📶 Your level: {state.get('level', DEFAULT_LEVEL)}\n"
+                 "1 = taught early in both Japan and Hong Kong primary school … 5 = rarer secondary-school kanji\n\n"
+                 f"Characters per level — {counts}\n\nChange it: /level 2 (or /level all)")
 
     elif cmd == "/stats":
         chars = sum(1 for k, _ in saved if k == "char")
